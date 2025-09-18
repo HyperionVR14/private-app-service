@@ -38,6 +38,9 @@ jobs:
       - name: Terraform fmt -reursive
         run: terraform fmt -recursive
 
+      - name: Terraform Import
+        run: terraform import azurerm_resource_group.rg "/subscriptions/790f3176-1ffb-43fb-8c6e-dcb6498eca5f/resourceGroups/rg-vpapp-dev"
+
       - name: Terraform Validate
         run: terraform validate -no-color
 
