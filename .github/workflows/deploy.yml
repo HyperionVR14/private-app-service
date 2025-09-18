@@ -108,7 +108,7 @@ jobs:
 
       - name: Terraform Plan
         run: terraform plan -no-color -input=false -lock-timeout=5m \
-             -var-file="envs/dev/terraform.tfvars" -out=tfplan
+             -var-file="terraform.tfvars" -out=tfplan
 
       - name: Terraform Apply (main only)
         if: github.ref == 'refs/heads/main'
