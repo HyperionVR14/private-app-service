@@ -10,10 +10,10 @@ resource "azurerm_storage_account" "sa" {
   account_replication_type = "LRS"
 
   # ключово изискване
-  public_network_access_enabled = false
+  public_network_access_enabled = true
 
   min_tls_version             = "TLS1_2"
-  allow_nested_items_to_be_public = false
+  allow_nested_items_to_be_public = true
 }
 data "azurerm_private_endpoint_connection" "blob_conn" {
   name                = azurerm_private_endpoint.pe_blob.name
