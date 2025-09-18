@@ -39,17 +39,6 @@ jobs:
       - name: Terraform Validate
         run: terraform validate -no-color
 
-      # 3) Настрой локален backend (никакви lock проблеми в CI)
-      - name: Use local backend
-        run: |
-          cat > backend.local.tf <<'EOF'
-          terraform {
-            backend "local" {}
-          }
-          EOF
-          rm -rf .terraform
-          terraform init -reconfigure
-
       # 4) Импорт на RG само ако го няма в state (иначе пропуска)
       - name: Conditional import RG
         run: |
