@@ -41,7 +41,7 @@ jobs:
 
       # 5) План и Apply (с lock timeout за всеки случай)
       - name: Terraform Plan
-        run: terraform plan -lock-timeout=5m -var-file=envs/dev/dev.tfvars -out=tfplan
+        run: terraform plan
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
