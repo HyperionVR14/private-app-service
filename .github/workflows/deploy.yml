@@ -23,9 +23,11 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.ARM_CLIENT_ID }}
-          tenant-id: ${{ secrets.ARM_TENANT_ID }}
-          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+         creds: >-
+          {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
+           "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
+           "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
+           "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -60,9 +62,11 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.ARM_CLIENT_ID }}
-          tenant-id: ${{ secrets.ARM_TENANT_ID }}
-          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+         creds: >-
+          {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
+           "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
+           "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
+           "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
 
       - name: Archive site
         run: |
@@ -103,9 +107,11 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.ARM_CLIENT_ID }}
-          tenant-id: ${{ secrets.ARM_TENANT_ID }}
-          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+         creds: >-
+          {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
+           "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
+           "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
+           "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
 
       - name: Create temp VM in private test subnet
         run: |
