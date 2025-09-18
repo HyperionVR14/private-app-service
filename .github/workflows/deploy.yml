@@ -1,0 +1,143 @@
+name: Deploy Infra (Terraform) + ZIP site + Private Smoke Test
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+env:
+  TF_IN_AUTOMATION: true
+
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    outputs:
+      rg: ${{ steps.out.outputs.rg }}
+      appname: ${{ steps.out.outputs.appname }}
+      fqdn: ${{ steps.out.outputs.fqdn }}
+      vnet: ${{ steps.out.outputs.vnet }}
+      snet_test: ${{ steps.out.outputs.snet_test }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=envs/dev/dev.tfvars -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Outputs
+        id: out
+        run: |
+          echo "rg=$(terraform output -raw resource_group)" >> $GITHUB_OUTPUT
+          echo "appname=$(terraform output -raw webapp_name)" >> $GITHUB_OUTPUT
+          echo "fqdn=$(terraform output -raw webapp_private_fqdn)" >> $GITHUB_OUTPUT
+          echo "vnet=$(terraform output -raw vnet_name)" >> $GITHUB_OUTPUT
+          echo "snet_test=$(terraform output -raw snet_test_name)" >> $GITHUB_OUTPUT
+
+  deploy_zip:
+    needs: infra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - name: Archive site
+        run: |
+          cd sample-site
+          zip -r ../site.zip .
+
+      - name: Discover runner public IP
+        id: ip
+        run: echo "ip=$(curl -s https://api.ipify.org)" >> $GITHUB_OUTPUT
+
+      - name: Temporarily allow SCM from runner IP
+        run: |
+          az webapp config access-restriction add \
+            --resource-group "${{ needs.infra.outputs.rg }}" \
+            --name "${{ needs.infra.outputs.appname }}" \
+            --rule-name "temp-allow-gha" --action Allow --priority 90 \
+            --ip-address "${{ steps.ip.outputs.ip }}/32" --scm-site true
+
+      - name: ZIP Deploy
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ needs.infra.outputs.appname }}
+          package: site.zip
+
+      - name: Remove temporary SCM allow
+        if: always()
+        run: |
+          az webapp config access-restriction remove \
+            --resource-group "${{ needs.infra.outputs.rg }}" \
+            --name "${{ needs.infra.outputs.appname }}" \
+            --rule-name "temp-allow-gha" --scm-site true
+
+  smoke_test_private:
+    name: Private Smoke Test from VM (no public IP)
+    needs: [infra, deploy_zip]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id: ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - name: Create temp VM in private test subnet
+        run: |
+          RG="${{ needs.infra.outputs.rg }}"
+          VNET="${{ needs.infra.outputs.vnet }}"
+          SUBNET="${{ needs.infra.outputs.snet_test }}"
+          VMNAME="testrunner-$RANDOM"
+          echo "VMNAME=$VMNAME" >> $GITHUB_ENV
+
+          az vm create \
+            --resource-group "$RG" \
+            --name "$VMNAME" \
+            --image "Ubuntu2204" \
+            --size "Standard_B1s" \
+            --vnet-name "$VNET" \
+            --subnet "$SUBNET" \
+            --public-ip-address "" \
+            --nsg "" \
+            --generate-ssh-keys
+
+      - name: Curl private FQDN from inside VNet
+        run: |
+          FQDN="${{ needs.infra.outputs.fqdn }}"
+          VMNAME="${{ env.VMNAME }}"
+          RG="${{ needs.infra.outputs.rg }}"
+          az vm run-command invoke \
+            --resource-group "$RG" --name "$VMNAME" \
+            --command-id RunShellScript \
+            --scripts "set -e; sudo apt-get update -y >/dev/null 2>&1 || true; sudo apt-get install -y curl >/dev/null 2>&1 || true; curl -ksS https://$FQDN | grep 'Private App Service works'"
+
+      - name: Cleanup temp VM
+        if: always()
+        run: |
+          az vm delete --yes --force-deletion yes --resource-group "${{ needs.infra.outputs.rg }}" --name "${{ env.VMNAME }}"
+          # удалявай и дискове/ NIC автоматично с --force-deletion yes
