@@ -7,6 +7,7 @@ on:
 
 env:
   TF_IN_AUTOMATION: true
+  TF_INPUT: false    # без интерактивни въпроси
   # Backend (твоята конфигурация)
   BACKEND_RG: RG-Lab
   BACKEND_SA: kristiyansterraform
@@ -106,7 +107,8 @@ jobs:
             -backend-config="use_azuread_auth=true"
 
       - name: Terraform Plan
-        run: terraform plan -no-color -lock-timeout=5m -out=tfplan
+        run: terraform plan -no-color -input=false -lock-timeout=5m \
+             -var-file="envs/dev/terraform.tfvars" -out=tfplan
 
       - name: Terraform Apply (main only)
         if: github.ref == 'refs/heads/main'
