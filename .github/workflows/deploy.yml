@@ -1,4 +1,4 @@
-name: Deploy Infra (Terraform) + ZIP site + Private Smoke Test
+name: Deploy Infra (Terraform)
 
 on:
   push:
@@ -7,142 +7,107 @@ on:
 
 env:
   TF_IN_AUTOMATION: true
-#fordeploy
+  # Backend (твоята конфигурация)
+  BACKEND_RG: RG-Lab
+  BACKEND_SA: kristiyansterraform
+  BACKEND_CONTAINER: private-app
+  BACKEND_KEY: terraform.private-app
+
+concurrency:
+  group: terraform-infra
+  cancel-in-progress: false
+
 jobs:
   infra:
     runs-on: ubuntu-latest
-    outputs:
-      rg: ${{ steps.out.outputs.rg }}
-      appname: ${{ steps.out.outputs.appname }}
-      fqdn: ${{ steps.out.outputs.fqdn }}
-      vnet: ${{ steps.out.outputs.vnet }}
-      snet_test: ${{ steps.out.outputs.snet_test }}
+    defaults:
+      run:
+        working-directory: .   # ← смени на "." ако .tf са в корена
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure Login
+      - name: Azure Login (Service Principal)
         uses: azure/login@v2
         with:
-         creds: >-
-          {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
-           "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
-           "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
-           "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
+          creds: >-
+            {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
+
+      - name: Azure CLI Preflight (SA reachable + RBAC + lease check)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SA="${BACKEND_SA}"
+          RG="${BACKEND_RG}"
+          CONT="${BACKEND_CONTAINER}"
+          KEY="${BACKEND_KEY}"
+
+          echo "== Management-plane read on SA =="
+          az storage account show -g "$RG" -n "$SA" 1>/dev/null
+
+          echo "== Public network access check =="
+          PNA=$(az storage account show -g "$RG" -n "$SA" --query "publicNetworkAccess" -o tsv)
+          if [ "$PNA" != "Enabled" ]; then
+            echo "ERROR: Storage Account publicNetworkAccess=$PNA. GitHub runners няма да стигнат SA-то."
+            exit 1
+          fi
+
+          echo "== Data-plane AAD access (container list) =="
+          az storage container list --account-name "$SA" --auth-mode login 1>/dev/null \
+            || { echo "ERROR: Нямаш Data-plane AAD достъп (Storage Blob Data Contributor) върху SA-то."; exit 1; }
+
+          echo "== RBAC sanity (Reader + Storage Blob Data Contributor) =="
+          # SP ObjectId
+          SP_OID=$(az ad sp show --id "${{ secrets.ARM_CLIENT_ID }}" --query id -o tsv)
+          SCOPE="/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$SA"
+          ROLES=$(az role assignment list --assignee "$SP_OID" --scope "$SCOPE" --query "[].roleDefinitionName" -o tsv | tr '\n' ',')
+
+          echo "Current roles: $ROLES"
+          echo "$ROLES" | grep -qi "Reader" || {
+            echo "WARN: Няма 'Reader' на SA → добави го (минималното за mgmt-plane read)."; }
+          echo "$ROLES" | grep -qi "Storage Blob Data Contributor" || {
+            echo "ERROR: Няма 'Storage Blob Data Contributor' на SA → backend няма да взима lease."; exit 1; }
+
+          echo "== Break stale lease if present =="
+          if az storage blob show --account-name "$SA" --container-name "$CONT" --name "$KEY" --auth-mode login >/dev/null 2>&1; then
+            lease_state=$(az storage blob show --account-name "$SA" --container-name "$CONT" --name "$KEY" --auth-mode login --query 'properties.lease.state' -o tsv)
+            if [ "$lease_state" = "leased" ]; then
+              az storage blob lease break --account-name "$SA" --container-name "$CONT" --blob-name "$KEY" --auth-mode login 1>/dev/null
+              echo "Lease broken."
+            else
+              echo "No active lease."
+            fi
+          else
+            echo "State blob does not exist yet. OK."
+          fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
 
-      # 2) Валидация БЕЗ backend (никога не „виси“)
-      - name: Terraform Init (no backend for validate)
-        run: terraform init
+      # Бърза валидация без backend (никога не "виси")
+      - name: Terraform Init (backend=false) for validate
+        run: terraform init -backend=false -reconfigure
 
       - name: Terraform Validate
         run: terraform validate -no-color
 
-      # 5) План и Apply (с lock timeout за всеки случай)
-      - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
-
-      - name: Get Outputs
-        id: out
+      # Истински init към remote backend с AAD
+      - name: Terraform Init (remote backend)
         run: |
-          echo "rg=$(terraform output -raw resource_group)" >> $GITHUB_OUTPUT
-          echo "appname=$(terraform output -raw webapp_name)" >> $GITHUB_OUTPUT
-          echo "fqdn=$(terraform output -raw webapp_private_fqdn)" >> $GITHUB_OUTPUT
-          echo "vnet=$(terraform output -raw vnet_name)" >> $GITHUB_OUTPUT
-          echo "snet_test=$(terraform output -raw snet_test_name)" >> $GITHUB_OUTPUT
+          terraform init -reconfigure \
+            -backend-config="resource_group_name=${BACKEND_RG}" \
+            -backend-config="storage_account_name=${BACKEND_SA}" \
+            -backend-config="container_name=${BACKEND_CONTAINER}" \
+            -backend-config="key=${BACKEND_KEY}" \
+            -backend-config="use_azuread_auth=true"
 
-  deploy_zip:
-    needs: infra
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - name: Terraform Plan
+        run: terraform plan -no-color -lock-timeout=5m -out=tfplan
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-         creds: >-
-          {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
-           "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
-           "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
-           "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
-
-      - name: Archive site
-        run: |
-          cd sample-site
-          zip -r ../site.zip .
-
-      - name: Discover runner public IP
-        id: ip
-        run: echo "ip=$(curl -s https://api.ipify.org)" >> $GITHUB_OUTPUT
-
-      - name: Temporarily allow SCM from runner IP
-        run: |
-          az webapp config access-restriction add \
-            --resource-group "${{ needs.infra.outputs.rg }}" \
-            --name "${{ needs.infra.outputs.appname }}" \
-            --rule-name "temp-allow-gha" --action Allow --priority 90 \
-            --ip-address "${{ steps.ip.outputs.ip }}/32" --scm-site true
-
-      - name: ZIP Deploy
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: ${{ needs.infra.outputs.appname }}
-          package: site.zip
-
-      - name: Remove temporary SCM allow
-        if: always()
-        run: |
-          az webapp config access-restriction remove \
-            --resource-group "${{ needs.infra.outputs.rg }}" \
-            --name "${{ needs.infra.outputs.appname }}" \
-            --rule-name "temp-allow-gha" --scm-site true
-
-  smoke_test_private:
-    name: Private Smoke Test from VM (no public IP)
-    needs: [infra, deploy_zip]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-         creds: >-
-          {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
-           "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
-           "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
-           "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
-
-      - name: Create temp VM in private test subnet
-        run: |
-          RG="${{ needs.infra.outputs.rg }}"
-          VNET="${{ needs.infra.outputs.vnet }}"
-          SUBNET="${{ needs.infra.outputs.snet_test }}"
-          VMNAME="testrunner-$RANDOM"
-          echo "VMNAME=$VMNAME" >> $GITHUB_ENV
-
-          az vm create \
-            --resource-group "$RG" \
-            --name "$VMNAME" \
-            --image "Ubuntu2204" \
-            --size "Standard_B1s" \
-            --vnet-name "$VNET" \
-            --subnet "$SUBNET" \
-            --public-ip-address "" \
-            --nsg "" \
-            --generate-ssh-keys
-
-      - name: Curl private FQDN from inside VNet
-        run: |
-          FQDN="${{ needs.infra.outputs.fqdn }}"
-          VMNAME="${{ env.VMNAME }}"
-          RG="${{ needs.infra.outputs.rg }}"
-          az vm run-command invoke \
-            --resource-group "$RG" --name "$VMNAME" \
-            --command-id RunShellScript \
-            --scripts "set -e; sudo apt-get update -y >/dev/null 2>&1 || true; sudo apt-get install -y curl >/dev/null 2>&1 || true; curl -ksS https://$FQDN | grep 'Private App Service works'"
-
-      - name: Cleanup temp VM
-        if: always()
-        run: |
-          az vm delete --yes --force-deletion yes --resource-group "${{ needs.infra.outputs.rg }}" --name "${{ env.VMNAME }}"
-          # удалявай и дискове/ NIC автоматично с --force-deletion yes
+      - name: Terraform Apply (main only)
+        if: github.ref == 'refs/heads/main'
+        run: terraform apply -auto-approve -lock-timeout=5m tfplan
