@@ -32,19 +32,39 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Init
-        run: terraform init -reconfigure
-
-      - run: terraform force-unlock -force 780802a1-ec11-2d63-5fd6-5ffe4389fa48
-
-      - name: Terraform Import
-        run: terraform import azurerm_resource_group.rg "/subscriptions/790f3176-1ffb-43fb-8c6e-dcb6498eca5f/resourceGroups/rg-vpapp-dev"
+      # 2) Валидация БЕЗ backend (никога не „виси“)
+      - name: Terraform Init (no backend for validate)
+        run: terraform init -backend=false -reconfigure
 
       - name: Terraform Validate
         run: terraform validate -no-color
 
+      # 3) Настрой локален backend (никакви lock проблеми в CI)
+      - name: Use local backend
+        run: |
+          cat > backend.local.tf <<'EOF'
+          terraform {
+            backend "local" {}
+          }
+          EOF
+          rm -rf .terraform
+          terraform init -reconfigure
+
+      # 4) Импорт на RG само ако го няма в state (иначе пропуска)
+      - name: Conditional import RG
+        run: |
+          set -e
+          RG_ID="/subscriptions/790f3176-1ffb-43fb-8c6e-dcb6498eca5f/resourceGroups/rg-vpapp-dev"
+          if terraform state show azurerm_resource_group.rg >/dev/null 2>&1; then
+            echo "RG already in state → skipping import"
+          else
+            echo "Importing RG into state..."
+            terraform import -lock-timeout=5m azurerm_resource_group.rg "$RG_ID"
+          fi
+
+      # 5) План и Apply (с lock timeout за всеки случай)
       - name: Terraform Plan
-        run: terraform plan -var-file=envs/dev/dev.tfvars -out=tfplan
+        run: terraform plan -lock-timeout=5m -var-file=envs/dev/dev.tfvars -out=tfplan
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
