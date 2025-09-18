@@ -15,6 +15,11 @@ resource "azurerm_storage_account" "sa" {
   min_tls_version             = "TLS1_2"
   allow_nested_items_to_be_public = false
 }
+data "azurerm_private_endpoint_connection" "blob_conn" {
+  name                = azurerm_private_endpoint.pe_blob.name
+  resource_group_name = var.rg_name
+  depends_on          = [azurerm_private_endpoint.pe_blob]
+}
 
 # Private Endpoint за blob
 resource "azurerm_private_endpoint" "pe_blob" {
@@ -36,13 +41,3 @@ resource "azurerm_private_endpoint" "pe_blob" {
   }
 }
 
-output "storage_account_name" { value = azurerm_storage_account.sa.name }
-# Вземаме private IP-то на PE-то след като бъде създадено
-data "azurerm_private_endpoint_connection" "blob_conn" {
-  name                = azurerm_private_endpoint.pe_blob.name
-  resource_group_name = var.rg_name
-
-  depends_on = [
-    azurerm_private_endpoint.pe_blob
-  ]
-}

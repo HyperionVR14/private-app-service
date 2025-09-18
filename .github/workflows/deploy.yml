@@ -35,6 +35,9 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
+      - name: Terraform fmt -reursive
+        run: terraform fmt -recursive
+
       - name: Terraform Validate
         run: terraform validate -no-color
 
