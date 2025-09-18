@@ -33,7 +33,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -reconfigure
 
       - run: terraform force-unlock -force d80d12b7-4989-0353-2a07-f6b0bb76bfbc
 
