@@ -13,6 +13,7 @@ env:
   BACKEND_SA: kristiyansterraform
   BACKEND_CONTAINER: private-app
   BACKEND_KEY: terraform.private-app
+  SITE_DIR: /sample-site
 
 concurrency:
   group: terraform-infra
