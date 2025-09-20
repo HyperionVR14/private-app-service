@@ -212,6 +212,14 @@ jobs:
         run: |
           az webapp config access-restriction remove -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy || true
+
+      - name: Export Terraform outputs
+        id: out
+        run: |
+          echo "rg=$(terraform output -raw resource_group)"            >> $GITHUB_OUTPUT
+          echo "vnet=$(terraform output -raw vnet_name)"               >> $GITHUB_OUTPUT
+          echo "snet=$(terraform output -raw snet_test_name)"          >> $GITHUB_OUTPUT
+          echo "fqdn=$(terraform output -raw webapp_private_fqdn)"     >> $GITHUB_OUTPUT            
       
   smoke:
     needs: [infra, app]
