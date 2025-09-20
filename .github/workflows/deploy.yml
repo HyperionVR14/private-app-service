@@ -114,3 +114,102 @@ jobs:
       - name: Terraform Apply (main only)
         if: github.ref == 'refs/heads/main'
         run: terraform apply -auto-approve -lock-timeout=5m tfplan
+      - name: Export Terraform outputs
+        id: out
+        run: |
+          echo "rg=$(terraform output -raw resource_group)"           >> $GITHUB_OUTPUT
+          echo "app=$(terraform output -raw webapp_name)"             >> $GITHUB_OUTPUT
+          echo "vnet=$(terraform output -raw vnet_name)"              >> $GITHUB_OUTPUT
+          echo "snet=$(terraform output -raw snet_test_name)"         >> $GITHUB_OUTPUT
+          echo "fqdn=$(terraform output -raw webapp_private_fqdn)"    >> $GITHUB_OUTPUT
+
+  app:
+    needs: infra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (SP)
+        uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
+
+      - name: Build ZIP
+        run: |
+          RG=rg-vpapp-dev
+          APP=vpapp-web
+          
+          # allow all към SCM (добави/override правило)
+          az webapp config access-restriction add -g $RG -n $APP \
+            --scm-site true --rule-name AllowAllForDeploy --priority 100 --action Allow \
+            --ip-address 0.0.0.0/0        
+          cd site              # <-- промени при нужда
+          zip -r ../site.zip .
+
+      - name: Deploy ZIP to App Service
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ needs.infra.outputs.app }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: site.zip
+
+  smoke:
+    needs: [infra, app]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Login (SP)
+        uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
+
+      - name: Private smoke test via ephemeral VM (no public IP)
+        id: smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ needs.infra.outputs.rg }}"
+          VNET="${{ needs.infra.outputs.vnet }}"
+          SNET="${{ needs.infra.outputs.snet }}"
+          FQDN="${{ needs.infra.outputs.fqdn }}"
+          VM="smoke-$(date +%s)"
+
+          echo "Creating VM $VM in $RG/$VNET/$SNET (no public IP)..."
+          az vm create -g "$RG" -n "$VM" \
+            --image Ubuntu2204 \
+            --size Standard_B1s \
+            --vnet-name "$VNET" --subnet "$SNET" \
+            --public-ip-address "" \
+            --admin-username azureuser \
+            --generate-ssh-keys 1>/dev/null
+
+          echo "Running curl against https://$FQDN ..."
+          az vm run-command invoke -g "$RG" -n "$VM" \
+            --command-id RunShellScript \
+            --scripts "code=\$(curl -sk -o /dev/null -w '%{http_code}' https://$FQDN/); echo code=\$code; if [ \"\$code\" -ge 200 -a \"\$code\" -lt 400 ]; then exit 0; else exit 1; fi"
+
+      - name: Cleanup smoke VM + NIC + disk
+        if: always()
+        shell: bash
+        run: |
+          RG="${{ needs.infra.outputs.rg }}"
+          # delete VM
+          for vm in $(az vm list -g "$RG" --query "[?starts_with(name, 'smoke-')].name" -o tsv); do
+            az vm delete -g "$RG" -n "$vm" --yes --force-deletion true || true
+          done
+          # delete NIC(s)
+          for nic in $(az network nic list -g "$RG" --query "[?starts_with(name, 'smoke-')].name" -o tsv); do
+            az network nic delete -g "$RG" -n "$nic" || true
+          done
+          # delete disk(s)
+          for disk in $(az disk list -g "$RG" --query "[?starts_with(name, 'smoke-')].name" -o tsv); do
+            az disk delete -g "$RG" -n "$disk" --yes || true
+          done
+
