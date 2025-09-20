@@ -137,62 +137,80 @@ jobs:
             {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
              "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
              "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
-             "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
-
-      - name: Open SCM temporarily (idempotent)
-        shell: bash
-        env:
-          RG: rg-vpapp-dev
-          APP: vpapp-web
-        run: |
-          set -euo pipefail
-          # махни старото правило, ако съществува
-          az webapp config access-restriction remove -g "$RG" -n "$APP" \
-            --scm-site true --rule-name AllowAllForDeploy || true
-          # добави allow all към SCM (временно)
-          az webapp config access-restriction add -g "$RG" -n "$APP" \
-            --scm-site true --rule-name AllowAllForDeploy --priority 100 --action Allow \
-            --ip-address 0.0.0.0/0
-      
-      - name: Build ZIP (auto-detect site dir)
-        shell: bash
-        run: |
-          set -euo pipefail
-          # ако искаш фиксиран път, сложи: SITE_DIR="my-html-app"
-          SITE_DIR="${SITE_DIR:-site}"
-          if [ ! -d "$SITE_DIR" ]; then
-            echo "SITE_DIR '$SITE_DIR' not found, auto-detecting..."
-            for d in site my-html-app wwwroot webapp .; do
-              if [ -d "$d" ]; then
-                if ls "$d" | grep -qiE 'index\.html|hostingstart\.html|web\.config|package\.json|pom\.xml|\.csproj$'; then
-                  SITE_DIR="$d"; break
-                fi
-              fi
-            done
-          fi
-          echo "Using SITE_DIR=$SITE_DIR"
-          # покажи дървото за дебъг
-          (set +e; ls -la "$SITE_DIR"; set -e)
-          # направи zip в корена на репото
-          (cd "$SITE_DIR" && zip -r ../site.zip .)
-          ls -lh site.zip
-      
-      - name: Deploy ZIP to App Service
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: vpapp-web              # или: ${{ needs.infra.outputs.app }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: site.zip
-      
-      - name: Close SCM rule
-        if: always()
-        shell: bash
-        env:
-          RG: rg-vpapp-dev
-          APP: vpapp-web
-        run: |
-          az webapp config access-restriction remove -g "$RG" -n "$APP" \
-            --scm-site true --rule-name AllowAllForDeploy || true
+             "tenantId":"${{ secrets.ARM_TENANT_ID }}"}             
+       
+       - name: Open SCM temporarily (idempotent)
+         shell: bash
+         env:
+           RG: rg-vpapp-dev
+           APP: vpapp-web
+         run: |
+           set -euo pipefail
+           az webapp config access-restriction remove -g "$RG" -n "$APP" \
+             --scm-site true --rule-name AllowAllForDeploy || true
+           az webapp config access-restriction add -g "$RG" -n "$APP" \
+             --scm-site true --rule-name AllowAllForDeploy --priority 100 --action Allow \
+             --ip-address 0.0.0.0/0
+           # Нужни са няколко секунди да се приложи правилото
+           sleep 10
+       
+       - name : Build ZIP (robust; relative paths only)
+         shell: bash
+         env:
+           # Ако знаеш папката — задай я БЕЗ водещ '/', напр. my-html-app
+           SITE_DIR: sample-site
+         run: |
+           set -euo pipefail
+           ROOT="$GITHUB_WORKSPACE"
+       
+           # 1) Нормализирай SITE_DIR (махни водещ '/')
+           SITE="${SITE_DIR:-}"
+           SITE="${SITE#/}"
+       
+           # 2) Кандидати за автодетект
+           CANDS=()
+           [ -n "$SITE" ] && CANDS+=("$SITE")
+           CANDS+=("site" "my-html-app" "wwwroot" "webapp" "public" "dist" "build" ".")
+       
+           echo "Repo root: $ROOT"
+           (set +e; echo "Tree snapshot:"; ls -la; find . -maxdepth 2 -type d | sort; set -e)
+       
+           # 3) Намери папка с уеб съдържание
+           FOUND=""
+           for d in "${CANDS[@]}"; do
+             if [ -d "$d" ]; then
+               if ls "$d" | grep -qiE 'index\.html|hostingstart\.html|web\.config|package\.json|pom\.xml|\.csproj$'; then
+                 FOUND="$d"
+                 break
+               fi
+             fi
+           done
+       
+           if [ -z "$FOUND" ]; then
+             echo "ERROR: Не намерих сайт директория. Сетни env: SITE_DIR: <relative-path> към папката с index.html."
+             exit 1
+           fi
+       
+           echo "Using SITE_DIR=$FOUND"
+           (cd "$FOUND" && zip -r "$ROOT/site.zip" .)
+           ls -lh "$ROOT/site.zip"
+       
+       - name: Deploy ZIP to App Service
+         uses: azure/webapps-deploy@v2
+         with:
+           app-name: vpapp-web
+           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+           package: site.zip
+       
+       - name: Close SCM rule
+         if: always()
+         shell: bash
+         env:
+           RG: rg-vpapp-dev
+           APP: vpapp-web
+         run: |
+           az webapp config access-restriction remove -g "$RG" -n "$APP" \
+             --scm-site true --rule-name AllowAllForDeploy || true
 
   smoke:
     needs: [infra, app]
