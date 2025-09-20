@@ -222,7 +222,7 @@ jobs:
           echo "fqdn=$(terraform output -raw webapp_private_fqdn)"     >> $GITHUB_OUTPUT            
       
   smoke:
-    needs: [infra, app]
+    needs: [infra]
     runs-on: ubuntu-latest
     steps:
       - name: Azure Login (SP)
@@ -233,6 +233,20 @@ jobs:
              "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
              "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
+      # Guard: виждаме стойностите, фейлваме ако някоя е празна
+      - name: Guard & echo outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ needs.infra.outputs.rg }}"
+          VNET="${{ needs.infra.outputs.vnet }}"
+          SNET="${{ needs.infra.outputs.snet }}"
+          FQDN="${{ needs.infra.outputs.fqdn }}"
+          echo "RG=$RG"
+          echo "VNET=$VNET"
+          echo "SNET=$SNET"
+          echo "FQDN=$FQDN"
+          test -n "$RG" && test -n "$VNET" && test -n "$SNET" && test -n "$FQDN" || { echo "Missing job outputs"; exit 1; }
 
       - name: Private smoke test via ephemeral VM (no public IP)
         id: smoke
