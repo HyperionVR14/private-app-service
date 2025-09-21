@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: .   # ← смени на "." ако .tf са в корена
+        working-directory: infra
     steps:
       - uses: actions/checkout@v4
 
