@@ -327,7 +327,7 @@ jobs:
              --scm-site true --rule-name AllowAllForDeploy --priority 100 --action Allow \
              --ip-address 0.0.0.0/0
            sleep 8
-   
+    
        # 1) Валидация на артефакт: SHA256(index.html в repo) == SHA256(index.html в wwwroot)
        - name: Verify wwwroot content hash via Kudu VFS
          shell: bash
