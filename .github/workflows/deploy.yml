@@ -225,13 +225,12 @@ jobs:
           az webapp config access-restriction remove -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy || true
 
-      - name: Export Terraform outputs
-        id: out
+      - name: Export Terraform outputs (JSON -> step outputs)
+        id: tf_out
         run: |
-          echo "rg=$(terraform output -raw resource_group)"            >> $GITHUB_OUTPUT
-          echo "vnet=$(terraform output -raw vnet_name)"               >> $GITHUB_OUTPUT
-          echo "snet=$(terraform output -raw snet_test_name)"          >> $GITHUB_OUTPUT
-          echo "fqdn=$(terraform output -raw webapp_private_fqdn)"     >> $GITHUB_OUTPUT            
+          set -euo pipefail
+          terraform output -json | tee tf_outputs.json
+          jq -r 'to_entries[] | "\(.key)=\(.value.value)"' tf_outputs.json >> "$GITHUB_OUTPUT"
       
   smoke:
     needs: [infra]
@@ -250,8 +249,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          RG="${{ needs.infra.outputs.rg }}"
+          APP="${{ needs.infra.outputs.app }}"
+          VNET="${{ needs.infra.outputs.vnet }}"
+          SNET="${{ needs.infra.outputs.snet }}"
+          FQDN="${{ needs.infra.outputs.fqdn }}"
           echo "RG=$RG"; echo "APP=$APP"; echo "VNET=$VNET"; echo "SNET=$SNET"; echo "FQDN=$FQDN"
-          test -n "$RG" && test -n "$APP" && test -n "$VNET" && test -n "$SNET" && test -n "$FQDN" || { echo "Missing job outputs"; exit 1; }
+          [[ -n "$RG" && -n "$APP" && -n "$VNET" && -n "$SNET" && -n "$FQDN" ]] || { echo "Missing job outputs"; exit 1; }
 
       - name: Private smoke test via ephemeral VM (no public IP)
         id: smoke
