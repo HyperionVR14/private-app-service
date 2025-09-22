@@ -232,7 +232,15 @@ jobs:
         run: |
           az webapp config access-restriction remove -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy || true
-      
+            
+      - name: Ensure static serving (Linux startup)
+        shell: bash
+        run: |
+          RG="${{ needs.infra.outputs.rg }}"
+          APP="${{ needs.infra.outputs.app }}"
+          az webapp config set -g "$RG" -n "$APP" --startup-file "pm2 serve /home/site/wwwroot --no-daemon"
+          az webapp restart -g "$RG" -n "$APP"
+                
   smoke:
     needs: [infra]
     runs-on: ubuntu-latest
