@@ -208,7 +208,21 @@ jobs:
           app-name: vpapp-web
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: sample-site
+      - name: List wwwroot via Kudu VFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ needs.infra.outputs.rg }}"
+          APP="${{ needs.infra.outputs.app }}"
       
+          # Вземи ZIP креденшъли (user/pass) за Kudu
+          read USER PASS < <(az webapp deployment list-publishing-profiles \
+            -g "$RG" -n "$APP" \
+            --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
+      
+          echo "Listing /site/wwwroot on Kudu:"
+          curl -sS -u "$USER:$PASS" "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/" | jq .
+                
       - name: Close SCM rule
         if: always()
         shell: bash
