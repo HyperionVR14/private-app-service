@@ -207,7 +207,7 @@ jobs:
         with:
           app-name: vpapp-web
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: site.zip
+          package: sample-site
       
       - name: Close SCM rule
         if: always()
