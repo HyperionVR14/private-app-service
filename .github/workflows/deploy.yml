@@ -337,15 +337,38 @@ jobs:
         run: |
           set -euo pipefail
           APP="${{ needs.infra.outputs.app }}"
-          WANT="${{ needs.infra.outputs.priv_ip }}"
-          ZONE="privatelink.azurewebsites.net      
+          WANT="${{ needs.infra.outputs.priv_ip }}"   # изкарай го от infra outputs
+          ZONE="privatelink.azurewebsites.net"
+      
+          # Намери RG на Private DNS зоната
           ZRG=$(az resource list --resource-type Microsoft.Network/privateDnsZones \
-                  --query "[?name=='$ZONE'].resourceGroup | [0]" -o tsv)
-          [ -n "$ZRG" ] || { echo "Private DNS zone $ZONE not found"; exit 1;       
-          GOT=$(az network private-dns record-set a show -g "$ZRG" -z "$ZONE" -n "$APP" \
-                  --query "arecords[0].ipv4Address" -o tsv)
-          echo "A $APP.$ZONE -> $GOT ; expected $WANT"
-          [ "$GOT" = "$WANT" ] || { echo "DNS A record mismatch"; exit 1;       
+                  --query "[?name=='${ZONE}'].resourceGroup | [0]" -o tsv)
+      
+          if [ -z "${ZRG}" ]; then
+            echo "Private DNS zone ${ZONE} not found in this subscription"; exit 1
+          fi
+      
+          # Вземи всички A записи за <app>.<zone>
+          mapfile -t GOT_ARR < <(az network private-dns record-set a show \
+              -g "${ZRG}" -z "${ZONE}" -n "${APP}" \
+              --query "arecords[].ipv4Address" -o tsv || true)
+      
+          if [ "${#GOT_ARR[@]}" -eq 0 ]; then
+            echo "No A records for ${APP}.${ZONE}"; exit 1
+          fi
+      
+          echo "A ${APP}.${ZONE} -> ${GOT_ARR[*]} ; expected ${WANT}"
+      
+          FOUND=0
+          for ip in "${GOT_ARR[@]}"; do
+            if [ "${ip}" = "${WANT}" ]; then FOUND=1; break; fi
+          done
+      
+          if [ "${FOUND}" -ne 1 ]; then
+            echo "DNS A record mismatch"; exit 1
+          fi
+      
+          echo "✅ DNS OK"
       # 3) Private Endpoint връзка: Approved/Succeeded
       - name: Private Endpoint connection status
         shell: bash
