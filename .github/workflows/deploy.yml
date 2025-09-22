@@ -331,55 +331,99 @@ jobs:
           # Нужни са няколко секунди да се приложи правилото
           sleep 10    
 
-      # 2) Private DNS A-запис == Terraform private IP
+  tests:
+    needs: [infra]           # или [infra, app] ако имаш отделен app job
+    runs-on: ubuntu-latest
+    env:
+      SITE_DIR: simple-site  # <- твоят статичен сайт (без водещ '/')
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.ARM_CLIENT_ID }}",
+             "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
+             "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
+             "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
+  
+      # Отваряме Kudu (ако е заключен)
+      - name: Open SCM temporarily
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ needs.infra.outputs.rg }}"
+          APP="${{ needs.infra.outputs.app }}"
+          az webapp config access-restriction remove -g "$RG" -n "$APP" \
+            --scm-site true --rule-name AllowAllForDeploy || true
+          az webapp config access-restriction add -g "$RG" -n "$APP" \
+            --scm-site true --rule-name AllowAllForDeploy --priority 100 --action Allow \
+            --ip-address 0.0.0.0/0
+          sleep 5
+  
+      # 1) Хеш проверка: локален index.html == качения в wwwroot
+      - name: Verify wwwroot content hash via Kudu VFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ needs.infra.outputs.rg }}"
+          APP="${{ needs.infra.outputs.app }}"
+          DIR="${SITE_DIR#/}"
+          [ -f "$DIR/index.html" ] || { echo "Missing $DIR/index.html"; exit 1; }
+          WANT=$(sha256sum "$DIR/index.html" | awk '{print $1}')
+          read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
+            --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
+          curl -fsS -u "$USER:$PASS" \
+            -o _index_remote.html \
+            "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/index.html"
+          GOT=$(sha256sum _index_remote.html | awk '{print $1}')
+          echo "local=$WANT remote=$GOT"
+          [ "$GOT" = "$WANT" ] || { echo "Content hash mismatch"; exit 1; }
+  
+      # 2) DNS: A записът в privatelink зоната сочи към priv_ip от Terraform
       - name: DNS A record matches private IP
         shell: bash
         run: |
           set -euo pipefail
           APP="${{ needs.infra.outputs.app }}"
-          WANT="${{ needs.infra.outputs.priv_ip }}"   # изкарай го от infra outputs
+          WANT="${{ needs.infra.outputs.priv_ip }}"
           ZONE="privatelink.azurewebsites.net"
-      
-          # Намери RG на Private DNS зоната
-          ZRG=$(az resource list --resource-type Microsoft.Network/privateDnsZones \
-                  --query "[?name=='${ZONE}'].resourceGroup | [0]" -o tsv)
-      
-          if [ -z "${ZRG}" ]; then
-            echo "Private DNS zone ${ZONE} not found in this subscription"; exit 1
-          fi
-      
-          # Вземи всички A записи за <app>.<zone>
+  
+          # гарантираме, че private-dns CLI е наличен
+          az extension add -n private-dns -y >/dev/null || true
+  
+          # открий RG на зоната в текущия subscription
+          ZRG=$(az network private-dns zone list \
+                 --query "[?name=='${ZONE}'].resourceGroup | [0]" -o tsv)
+          [ -n "$ZRG" ] || { echo "Private DNS zone ${ZONE} not found"; exit 1; }
+  
+          # вземи всички A записи за <app>.<zone>
           mapfile -t GOT_ARR < <(az network private-dns record-set a show \
-              -g "${ZRG}" -z "${ZONE}" -n "${APP}" \
-              --query "arecords[].ipv4Address" -o tsv || true)
-      
-          if [ "${#GOT_ARR[@]}" -eq 0 ]; then
-            echo "No A records for ${APP}.${ZONE}"; exit 1
-          fi
-      
+            -g "${ZRG}" -z "${ZONE}" -n "${APP}" \
+            --query "arecords[].ipv4Address" -o tsv || true)
+  
+          [ "${#GOT_ARR[@]}" -gt 0 ] || { echo "No A records for ${APP}.${ZONE}"; exit 1; }
+  
           echo "A ${APP}.${ZONE} -> ${GOT_ARR[*]} ; expected ${WANT}"
-      
-          FOUND=0
           for ip in "${GOT_ARR[@]}"; do
-            if [ "${ip}" = "${WANT}" ]; then FOUND=1; break; fi
+            [ "$ip" = "$WANT" ] && { echo "DNS OK"; exit 0; }
           done
-      
-          if [ "${FOUND}" -ne 1 ]; then
-            echo "DNS A record mismatch"; exit 1
-          fi
-      
-          echo "✅ DNS OK"
-      # 3) Private Endpoint връзка: Approved/Succeeded
+          echo "DNS A record mismatch"; exit 1
+  
+      # 3) Private Endpoint връзки: Approved/Succeeded
       - name: Private Endpoint connection status
         shell: bash
         run: |
           set -euo pipefail
           RG="${{ needs.infra.outputs.rg }}"
           APP="${{ needs.infra.outputs.app }}"
-          az webapp show -g "$RG" -n "$APP" \
-            --query "privateEndpointConnections[].{status:privateLinkServiceConnectionState.status,prov:provisioningState}" -o tsv | tee status.txt
-          grep -q "Approved" status.txt && grep -q "Succeeded" status.txt || { echo "PE not Approved/Succeeded"; exit 1;       
-      # 4) App state: Running
+          OUT=$(az webapp show -g "$RG" -n "$APP" \
+            --query "privateEndpointConnections[].{status:privateLinkServiceConnectionState.status,prov:provisioningState}" -o tsv)
+          echo "$OUT"
+          echo "$OUT" | grep -q "Approved" && echo "$OUT" | grep -q "Succeeded" || { echo "PE not Approved/Succeeded"; exit 1; }
+  
+      # 4) Приложението е Running
       - name: Web App is Running
         shell: bash
         run: |
@@ -388,22 +432,14 @@ jobs:
           APP="${{ needs.infra.outputs.app }}"
           STATE=$(az webapp show -g "$RG" -n "$APP" --query "state" -o tsv)
           echo "State=$STATE"
-          [ "$STATE" = "Running" ] || { echo "App not Running"; exit 1;       
-      # (опц.) кратък VFS листинг за видимост
-      - name: VFS list wwwroot (optional)
-        shell: bash
-        run: |
-          set -euo pipefail
-          RG="${{ needs.infra.outputs.rg }}"
-          APP="${{ needs.infra.outputs.app }}"
-          read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
-            --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
-          curl -sS -u "$USER:$PASS" "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/" | jq       
-      # 5) Затвори SCM правилото винаги
+          [ "$STATE" = "Running" ] || { echo "App not Running"; exit 1; }
+  
+      # Затвори SCM винаги
       - name: Close SCM rule
         if: always()
         shell: bash
         run: |
+          set -euo pipefail
           RG="${{ needs.infra.outputs.rg }}"
           APP="${{ needs.infra.outputs.app }}"
           az webapp config access-restriction remove -g "$RG" -n "$APP" \
