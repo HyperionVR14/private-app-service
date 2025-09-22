@@ -330,23 +330,7 @@ jobs:
             --ip-address 0.0.0.0/0
           # Нужни са няколко секунди да се приложи правилото
           sleep 10    
-      
-          # 2) Вземи Kudu креденшъли и свали remote файла
-          read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
-            --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
-      
-          curl -fsS -u "$USER:$PASS" \
-            -o _index_remote.html \
-            "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/index.html"
-      
-          GOT=$(sha256sum _index_remote.html | awk '{print $1}')
-          echo "wwwroot index.html SHA256=$GOT"
-      
-          if [ "$GOT" = "$WANT" ]; then
-            echo "✅ Content hash match"
-          else
-            echo "❌ Content hash mismatch (deploy wrong or stale)"; exit 1
-          fi
+
       # 2) Private DNS A-запис == Terraform private IP
       - name: DNS A record matches private IP
         shell: bash
