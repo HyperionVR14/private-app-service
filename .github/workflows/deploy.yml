@@ -133,12 +133,6 @@ jobs:
   app:
     needs: infra
     runs-on: ubuntu-latest
-    env:
-      RG:   ${{ needs.infra.outputs.rg }}
-      APP:  ${{ needs.infra.outputs.app }}
-      VNET: ${{ needs.infra.outputs.vnet }}
-      SNET: ${{ needs.infra.outputs.snet }}
-      FQDN: ${{ needs.infra.outputs.fqdn }}    
     steps:
       - uses: actions/checkout@v4
 
