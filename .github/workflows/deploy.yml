@@ -218,13 +218,6 @@ jobs:
         run: |
           az webapp config access-restriction remove -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy || true
-
-      - name: Export Terraform outputs (JSON -> step outputs)
-        id: tf_out
-        run: |
-          set -euo pipefail
-          terraform output -json | tee tf_outputs.json
-          jq -r 'to_entries[] | "\(.key)=\(.value.value)"' tf_outputs.json >> "$GITHUB_OUTPUT"
       
   smoke:
     needs: [infra]
