@@ -338,8 +338,8 @@ jobs:
           RG="${{ needs.infra.outputs.rg }}"
           APP="${{ needs.infra.outputs.app }}      
           # 1.1 Изчисли хеша на репото (очакван)
-          [ -f simple-site/index.html ] || { echo "Missing simple-site/index.html in repo"; exit 1; }
-          WANT=$(sha256sum simple-site/index.html | awk '{print $1}')
+          [ -f sample-site/index.html ] || { echo "Missing sample-site/index.html in repo"; exit 1; }
+          WANT=$(sha256sum sample-site/index.html | awk '{print $1}')
           echo "Repo index.html SHA256=$WANT      
           # 1.2 Вземи Kudu basic creds и свали файла от wwwroot
           read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
