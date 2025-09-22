@@ -208,6 +208,30 @@ jobs:
           app-name: vpapp-web
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: sample-site
+      - name: Ensure PHP static config
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ needs.infra.outputs.rg }}"
+          APP="${{ needs.infra.outputs.app }}"
+      
+          # 1) Форсирай PHP 8.2 runtime и празен startup (да няма custom процес)
+          az webapp config set -g "$RG" -n "$APP" \
+            --linux-fx-version "PHP|8.2" \
+            --startup-file ""
+      
+          # 2) Премахни настройки, които могат да пренасочат съдържанието
+          az webapp config appsettings delete -g "$RG" -n "$APP" \
+            --setting-names WEBSITE_RUN_FROM_PACKAGE SCM_DO_BUILD_DURING_DEPLOYMENT ENABLE_ORYX_BUILD \
+            || true
+      
+          # (по желание) махни hostingstart.html, за да няма двусмислие
+          read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
+            --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
+          curl -sS -u "$USER:$PASS" -X DELETE \
+            "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/hostingstart.html" || true
+      
+          az webapp restart -g "$RG" -n "$APP"          
       - name: List wwwroot via Kudu VFS
         shell: bash
         run: |
@@ -232,7 +256,7 @@ jobs:
         run: |
           az webapp config access-restriction remove -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy || true
-            
+
       - name: Ensure static serving (Linux startup)
         shell: bash
         run: |
@@ -240,7 +264,30 @@ jobs:
           APP="${{ needs.infra.outputs.app }}"
           az webapp config set -g "$RG" -n "$APP" --startup-file "pm2 serve /home/site/wwwroot --no-daemon"
           az webapp restart -g "$RG" -n "$APP"
-                
+      - name: Private smoke (expect 200 on / and /index.html)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ needs.infra.outputs.rg }}"
+          VNET="${{ needs.infra.outputs.vnet }}"
+          SNET="${{ needs.infra.outputs.snet }}"
+          FQDN="${{ needs.infra.outputs.fqdn }}"
+          VM="smoke-$(date +%s)"
+      
+          az vm create -g "$RG" -n "$VM" --image Ubuntu2204 --size Standard_B1s \
+            --vnet-name "$VNET" --subnet "$SNET" --public-ip-address "" \
+            --admin-username azureuser --generate-ssh-keys 1>/dev/null
+      
+          for path in "/" "/index.html"; do
+            RESULT=$(az vm run-command invoke -g "$RG" -n "$VM" \
+              --command-id RunShellScript \
+              --scripts "curl -sk -o /dev/null -w '%{http_code}' https://${FQDN}${path}" \
+              --query "value[0].message" -o tsv)
+            CODE=$(echo "$RESULT" | grep -oE '[0-9]{3}' | tail -1)
+            echo "GET ${path} -> HTTP $CODE"
+            [ "$CODE" -ge 200 ] && [ "$CODE" -lt 400 ] || exit 1
+          done
+
   smoke:
     needs: [infra]
     runs-on: ubuntu-latest
