@@ -335,7 +335,7 @@ jobs:
     needs: [infra]           # или [infra, app] ако имаш отделен app job
     runs-on: ubuntu-latest
     env:
-      SITE_DIR: simple-site  # <- твоят статичен сайт (без водещ '/')
+      SITE_DIR: sample-site  # <- твоят статичен сайт (без водещ '/')
     steps:
       - uses: actions/checkout@v4
   
