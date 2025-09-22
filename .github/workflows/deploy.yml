@@ -330,27 +330,47 @@ jobs:
             --ip-address 0.0.0.0/0
           # Нужни са няколко секунди да се приложи правилото
           sleep 10    
-      # 1) Валидация на артефакт: SHA256(index.html в repo) == SHA256(index.html в wwwroot)
-      - name: Verify wwwroot content hash via Kudu VFS
+      - name: Verify wwwroot content hash via Kudu VFS (robust)
         shell: bash
+        env:
+          SITE_DIR: ${{ env.SITE_DIR }}   # по желание: задай тук напр. "simple-site"
         run: |
           set -euo pipefail
           RG="${{ needs.infra.outputs.rg }}"
-          APP="${{ needs.infra.outputs.app }}      
-          # 1.1 Изчисли хеша на репото (очакван)
-          [ -f sample-site/index.html ] || { echo "Missing sample-site/index.html in repo"; exit 1; }
-          WANT=$(sha256sum sample-site/index.html | awk '{print $1}')
-          echo "Repo index.html SHA256=$WANT      
-          # 1.2 Вземи Kudu basic creds и свали файла от wwwroot
+          APP="${{ needs.infra.outputs.app }}"
+      
+          # 1) Намери локалния index.html
+          SITE="${SITE_DIR:-}"; SITE="${SITE#/}"   # махни водещ '/'
+          CONTENT=""
+          if [ -n "$SITE" ] && [ -f "$SITE/index.html" ]; then
+            CONTENT="$SITE/index.html"
+          else
+            for d in sample-site sample-site site wwwroot webapp public dist build .; do
+              if [ -f "$d/index.html" ]; then CONTENT="$d/index.html"; break; fi
+            done
+          fi
+          echo "Detected local index: ${CONTENT:-<none>}"
+          [ -n "$CONTENT" ] || { echo "❌ Не намерих index.html в репото. Задай SITE_DIR към папката си (напр. sample-site)."; exit 1; }
+      
+          WANT=$(sha256sum "$CONTENT" | awk '{print $1}')
+          echo "Repo index.html SHA256=$WANT"
+      
+          # 2) Вземи Kudu креденшъли и свали remote файла
           read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
-            --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv      
-          curl -sS -u "$USER:$PASS" \
+            --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
+      
+          curl -fsS -u "$USER:$PASS" \
             -o _index_remote.html \
-            "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/index.html" || {
-              echo "index.html not found in wwwroot"; exit 1;       
+            "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/index.html"
+      
           GOT=$(sha256sum _index_remote.html | awk '{print $1}')
-          echo "wwwroot index.html SHA256=$GOT      
-          [ "$GOT" = "$WANT" ] || { echo "Content hash mismatch (deploy wrong or stale)"; exit 1;       
+          echo "wwwroot index.html SHA256=$GOT"
+      
+          if [ "$GOT" = "$WANT" ]; then
+            echo "✅ Content hash match"
+          else
+            echo "❌ Content hash mismatch (deploy wrong or stale)"; exit 1
+          fi
       # 2) Private DNS A-запис == Terraform private IP
       - name: DNS A record matches private IP
         shell: bash
