@@ -315,18 +315,21 @@ jobs:
           az vm run-command invoke -g "$RG" -n "$VM" \
             --command-id RunShellScript \
             --scripts "code=\$(curl -sk -o /dev/null -w '%{http_code}' https://$FQDN/); echo code=\$code; if [ \"\$code\" -ge 200 -a \"\$code\" -lt 400 ]; then exit 0; else exit 1; fi"
-       # 0) Отвори SCM (Kudu) временно
-      - name: Open SCM temporarily
+      - name: Open SCM temporarily (idempotent)
         shell: bash
+        env:
+          RG: rg-vpapp-dev
+          APP: vpapp-web
+          SITE_DIR: sample-site	
         run: |
-          RG="${{ needs.infra.outputs.rg }}"
-          APP="${{ needs.infra.outputs.app }}"
+          set -euo pipefail
           az webapp config access-restriction remove -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy || true
           az webapp config access-restriction add -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy --priority 100 --action Allow \
             --ip-address 0.0.0.0/0
-          sleep       
+          # Нужни са няколко секунди да се приложи правилото
+          sleep 10    
       # 1) Валидация на артефакт: SHA256(index.html в repo) == SHA256(index.html в wwwroot)
       - name: Verify wwwroot content hash via Kudu VFS
         shell: bash
