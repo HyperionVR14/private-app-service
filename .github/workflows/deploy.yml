@@ -264,29 +264,6 @@ jobs:
           APP="${{ needs.infra.outputs.app }}"
           az webapp config set -g "$RG" -n "$APP" --startup-file "pm2 serve /home/site/wwwroot --no-daemon"
           az webapp restart -g "$RG" -n "$APP"
-      - name: Private smoke (expect 200 on / and /index.html)
-        shell: bash
-        run: |
-          set -euo pipefail
-          RG="${{ needs.infra.outputs.rg }}"
-          VNET="${{ needs.infra.outputs.vnet }}"
-          SNET="${{ needs.infra.outputs.snet }}"
-          FQDN="${{ needs.infra.outputs.fqdn }}"
-          VM="smoke-$(date +%s)"
-      
-          az vm create -g "$RG" -n "$VM" --image Ubuntu2204 --size Standard_B1s \
-            --vnet-name "$VNET" --subnet "$SNET" --public-ip-address "" \
-            --admin-username azureuser --generate-ssh-keys 1>/dev/null
-      
-          for path in "/" "/index.html"; do
-            RESULT=$(az vm run-command invoke -g "$RG" -n "$VM" \
-              --command-id RunShellScript \
-              --scripts "curl -sk -o /dev/null -w '%{http_code}' https://${FQDN}${path}" \
-              --query "value[0].message" -o tsv)
-            CODE=$(echo "$RESULT" | grep -oE '[0-9]{3}' | tail -1)
-            echo "GET ${path} -> HTTP $CODE"
-            [ "$CODE" -ge 200 ] && [ "$CODE" -lt 400 ] || exit 1
-          done
 
   smoke:
     needs: [infra]
