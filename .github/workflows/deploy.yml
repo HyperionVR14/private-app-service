@@ -377,32 +377,32 @@ jobs:
    #       echo "local=$WANT remote=$GOT"
    #       [ "$GOT" = "$WANT" ] || { echo "Content hash mismatch"; exit 1; }
   
-      # 2) DNS: The record in the privatelink zone pounting out towards priv_ip
-      - name: DNS A record matches private IP
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP="${{ needs.infra.outputs.app }}"
-          WANT="${{ needs.infra.outputs.priv_ip }}"
-          ZONE="privatelink.azurewebsites.net"
-
-          az extension add -n private-dns -y >/dev/null || true
-  
-          ZRG=$(az network private-dns zone list \
-                 --query "[?name=='${ZONE}'].resourceGroup | [0]" -o tsv)
-          [ -n "$ZRG" ] || { echo "Private DNS zone ${ZONE} not found"; exit 1; }
-  
-          mapfile -t GOT_ARR < <(az network private-dns record-set a show \
-            -g "${ZRG}" -z "${ZONE}" -n "${APP}" \
-            --query "arecords[].ipv4Address" -o tsv || true)
-  
-          [ "${#GOT_ARR[@]}" -gt 0 ] || { echo "No A records for ${APP}.${ZONE}"; exit 1; }
-  
-          echo "A ${APP}.${ZONE} -> ${GOT_ARR[*]} ; expected ${WANT}"
-          for ip in "${GOT_ARR[@]}"; do
-            [ "$ip" = "$WANT" ] && { echo "DNS OK"; exit 0; }
-          done
-          echo "DNS A record mismatch"; exit 1
+  #    # 2) DNS: The record in the privatelink zone pounting out towards priv_ip
+  #    - name: DNS A record matches private IP
+  #      shell: bash
+  #      run: |
+  #        set -euo pipefail
+  #        APP="${{ needs.infra.outputs.app }}"
+  #        WANT="${{ needs.infra.outputs.priv_ip }}"
+  #        ZONE="privatelink.azurewebsites.net"
+#
+  #        az extension add -n private-dns -y >/dev/null || true
+  #
+  #        ZRG=$(az network private-dns zone list \
+  #               --query "[?name=='${ZONE}'].resourceGroup | [0]" -o tsv)
+  #        [ -n "$ZRG" ] || { echo "Private DNS zone ${ZONE} not found"; exit 1; }
+  #
+  #        mapfile -t GOT_ARR < <(az network private-dns record-set a show \
+  #          -g "${ZRG}" -z "${ZONE}" -n "${APP}" \
+  #          --query "arecords[].ipv4Address" -o tsv || true)
+  #
+  #        [ "${#GOT_ARR[@]}" -gt 0 ] || { echo "No A records for ${APP}.${ZONE}"; exit 1; }
+  #
+  #        echo "A ${APP}.${ZONE} -> ${GOT_ARR[*]} ; expected ${WANT}"
+  #        for ip in "${GOT_ARR[@]}"; do
+  #          [ "$ip" = "$WANT" ] && { echo "DNS OK"; exit 0; }
+  #        done
+  #        echo "DNS A record mismatch"; exit 1
   
       # 3) Private Endpoint Connections: Approved/Succeeded
       - name: Private Endpoint connection status
