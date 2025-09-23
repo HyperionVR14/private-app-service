@@ -36,47 +36,17 @@ resource "azurerm_subnet" "snet_test" {
   address_prefixes     = [var.snet_test_cidr]
 }
 
-resource "azurerm_network_security_group" "nsg" {
-  name                = "${var.name_prefix}-nsg"
-  location            = var.location
-  resource_group_name = var.rg_name
-
-  security_rule {
-    name                       = "AllowVnetInBound"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "VirtualNetwork"
-    destination_address_prefix = "VirtualNetwork"
-  }
-
-  security_rule {
-    name                       = "DenyInternetInBound"
-    priority                   = 200
-    direction                  = "Inbound"
-    access                     = "Deny"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "Internet"
-    destination_address_prefix = "*"
-  }
-}
-
 resource "azurerm_subnet_network_security_group_association" "app_assoc" {
   subnet_id                 = azurerm_subnet.snet_app.id
-  network_security_group_id = azurerm_network_security_group.nsg.id
+  network_security_group_id = azurerm_network_security_group.workload_nsg.id
 }
 
 resource "azurerm_subnet_network_security_group_association" "pe_assoc" {
   subnet_id                 = azurerm_subnet.snet_pe.id
-  network_security_group_id = azurerm_network_security_group.nsg.id
+  network_security_group_id = azurerm_network_security_group.pe_nsg.id
 }
 
 resource "azurerm_subnet_network_security_group_association" "test_assoc" {
   subnet_id                 = azurerm_subnet.snet_test.id
-  network_security_group_id = azurerm_network_security_group.nsg.id
+  network_security_group_id = azurerm_network_security_group.workload_nsg.id
 }
