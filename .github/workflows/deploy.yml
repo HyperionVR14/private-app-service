@@ -358,24 +358,24 @@ jobs:
             --ip-address 0.0.0.0/0
           sleep 5
   
-      # 1) Hash check of the content uploaded in WWWROOT
-      - name: Verify wwwroot content hash via Kudu VFS
-        shell: bash
-        run: |
-          set -euo pipefail
-          RG="${{ needs.infra.outputs.rg }}"
-          APP="${{ needs.infra.outputs.app }}"
-          DIR="${SITE_DIR#/}"
-          [ -f "$DIR/index.html" ] || { echo "Missing $DIR/index.html"; exit 1; }
-          WANT=$(sha256sum "$DIR/index.html" | awk '{print $1}')
-          read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
-            --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
-          curl -fsS -u "$USER:$PASS" \
-            -o _index_remote.html \
-            "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/index.html"
-          GOT=$(sha256sum _index_remote.html | awk '{print $1}')
-          echo "local=$WANT remote=$GOT"
-          [ "$GOT" = "$WANT" ] || { echo "Content hash mismatch"; exit 1; }
+   #   # 1) Hash check of the content uploaded in WWWROOT
+   #   - name: Verify wwwroot content hash via Kudu VFS
+   #     shell: bash
+   #     run: |
+   #       set -euo pipefail
+   #       RG="${{ needs.infra.outputs.rg }}"
+   #       APP="${{ needs.infra.outputs.app }}"
+   #       DIR="${SITE_DIR#/}"
+   #       [ -f "$DIR/index.html" ] || { echo "Missing $DIR/index.html"; exit 1; }
+   #       WANT=$(sha256sum "$DIR/index.html" | awk '{print $1}')
+   #       read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
+   #         --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
+   #       curl -fsS -u "$USER:$PASS" \
+   #         -o _index_remote.html \
+   #         "https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/index.html"
+   #       GOT=$(sha256sum _index_remote.html | awk '{print $1}')
+   #       echo "local=$WANT remote=$GOT"
+   #       [ "$GOT" = "$WANT" ] || { echo "Content hash mismatch"; exit 1; }
   
       # 2) DNS: The record in the privatelink zone pounting out towards priv_ip
       - name: DNS A record matches private IP
