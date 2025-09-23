@@ -7,8 +7,8 @@ on:
 
 env:
   TF_IN_AUTOMATION: true
-  TF_INPUT: false    # без интерактивни въпроси
-  # Backend (твоята конфигурация)
+  TF_INPUT: false    # To avoid interactive questions
+  # Backend (RG-Lab)
   BACKEND_RG: RG-Lab
   BACKEND_SA: kristiyansterraform
   BACKEND_CONTAINER: private-app
@@ -59,13 +59,13 @@ jobs:
           echo "== Public network access check =="
           PNA=$(az storage account show -g "$RG" -n "$SA" --query "publicNetworkAccess" -o tsv)
           if [ "$PNA" != "Enabled" ]; then
-            echo "ERROR: Storage Account publicNetworkAccess=$PNA. GitHub runners няма да стигнат SA-то."
+            echo "ERROR: Storage Account publicNetworkAccess=$PNA. GitHub runners cannot reach SA."
             exit 1
           fi
 
           echo "== Data-plane AAD access (container list) =="
           az storage container list --account-name "$SA" --auth-mode login 1>/dev/null \
-            || { echo "ERROR: Нямаш Data-plane AAD достъп (Storage Blob Data Contributor) върху SA-то."; exit 1; }
+            || { echo "ERROR: No Data-plane AAD access (Storage Blob Data Contributor) on the SA"; exit 1; }
 
           echo "== RBAC sanity (Reader + Storage Blob Data Contributor) =="
           # SP ObjectId
@@ -75,9 +75,9 @@ jobs:
 
           echo "Current roles: $ROLES"
           echo "$ROLES" | grep -qi "Reader" || {
-            echo "WARN: Няма 'Reader' на SA → добави го (минималното за mgmt-plane read)."; }
+            echo "WARN: No 'Reader' on the SA → add it (minimum for mgmt-plane read)."; }
           echo "$ROLES" | grep -qi "Storage Blob Data Contributor" || {
-            echo "ERROR: Няма 'Storage Blob Data Contributor' на SA → backend няма да взима lease."; exit 1; }
+            echo "ERROR: No 'Storage Blob Data Contributor' on the SA → backend cannot get lease."; exit 1; }
 
           echo "== Break stale lease if present =="
           if az storage blob show --account-name "$SA" --container-name "$CONT" --name "$KEY" --auth-mode login >/dev/null 2>&1; then
@@ -97,14 +97,14 @@ jobs:
         with:
           terraform_wrapper: false
 
-      # Бърза валидация без backend (никога не "виси")
+      # Quick initialiation / validation without backend, to avoid hanging
       - name: Terraform Init (backend=false) for validate
         run: terraform init -backend=false -reconfigure
 
       - name: Terraform Validate
         run: terraform validate -no-color
 
-      # Истински init към remote backend с AAD
+      # True init on this step with my remote backend
       - name: Terraform Init (remote backend)
         run: |
           terraform init -reconfigure \
@@ -128,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           terraform output -json | tee tf_outputs.json
-          # ще създаде step outputs със същите имена като в Terraform
+          # Will create step ouputs with the same names as in terraform
           jq -r 'to_entries[] | "\(.key)=\(.value.value)"' tf_outputs.json >> "$GITHUB_OUTPUT"
 
   app:
@@ -159,23 +159,23 @@ jobs:
           az webapp config access-restriction add -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy --priority 100 --action Allow \
             --ip-address 0.0.0.0/0
-          # Нужни са няколко секунди да се приложи правилото
+          # Couple of mins are required to apply the rule. some issues faced here.
           sleep 10
       
       - name: Build ZIP (robust; relative paths only)
         shell: bash
         env:
-          # Ако знаеш папката — задай я БЕЗ водещ '/', напр. my-html-app
+          # repo location of the website
           SITE_DIR: sample-site
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
       
-          # 1) Нормализирай SITE_DIR (махни водещ '/')
+          # 1) Normalizing SITE_DIR
           SITE="${SITE_DIR:-}"
           SITE="${SITE#/}"
       
-          # 2) Кандидати за автодетект
+          # 2) Autodetect
           CANDS=()
           [ -n "$SITE" ] && CANDS+=("$SITE")
           CANDS+=("site" "my-html-app" "wwwroot" "webapp" "public" "dist" "build" ".")
@@ -183,7 +183,7 @@ jobs:
           echo "Repo root: $ROOT"
           (set +e; echo "Tree snapshot:"; ls -la; find . -maxdepth 2 -type d | sort; set -e)
       
-          # 3) Намери папка с уеб съдържание
+          # 3) Searching for folder with web content
           FOUND=""
           for d in "${CANDS[@]}"; do
             if [ -d "$d" ]; then
@@ -195,7 +195,7 @@ jobs:
           done
       
           if [ -z "$FOUND" ]; then
-            echo "ERROR: Не намерих сайт директория. Сетни env: SITE_DIR: <relative-path> към папката с index.html."
+            echo "ERROR: Unable to find website directory."
             exit 1
           fi
       
@@ -216,17 +216,14 @@ jobs:
           RG="${{ needs.infra.outputs.rg }}"
           APP="${{ needs.infra.outputs.app }}"
       
-          # 1) Форсирай PHP 8.2 runtime и празен startup (да няма custom процес)
           az webapp config set -g "$RG" -n "$APP" \
             --linux-fx-version "PHP|8.2" \
             --startup-file ""
-      
-          # 2) Премахни настройки, които могат да пренасочат съдържанието
+    
           az webapp config appsettings delete -g "$RG" -n "$APP" \
             --setting-names WEBSITE_RUN_FROM_PACKAGE SCM_DO_BUILD_DURING_DEPLOYMENT ENABLE_ORYX_BUILD \
             || true
       
-          # (по желание) махни hostingstart.html, за да няма двусмислие
           read USER PASS < <(az webapp deployment list-publishing-profiles -g "$RG" -n "$APP" \
             --query "[?publishMethod=='ZipDeploy'].[userName,userPWD]" -o tsv)
           curl -sS -u "$USER:$PASS" -X DELETE \
@@ -278,7 +275,7 @@ jobs:
              "clientSecret":"${{ secrets.ARM_CLIENT_SECRET }}",
              "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
-      # Guard: виждаме стойностите, фейлваме ако някоя е празна
+      # Guard: Need some outputs here because the tests will fail without dynamic data
       - name: Guard & echo outputs
         shell: bash
         run: |
@@ -328,14 +325,13 @@ jobs:
           az webapp config access-restriction add -g "$RG" -n "$APP" \
             --scm-site true --rule-name AllowAllForDeploy --priority 100 --action Allow \
             --ip-address 0.0.0.0/0
-          # Нужни са няколко секунди да се приложи правилото
           sleep 10    
 
   tests:
-    needs: [infra]           # или [infra, app] ако имаш отделен app job
+    needs: [infra] 
     runs-on: ubuntu-latest
     env:
-      SITE_DIR: sample-site  # <- твоят статичен сайт (без водещ '/')
+      SITE_DIR: sample-site
     steps:
       - uses: actions/checkout@v4
   
@@ -348,7 +344,7 @@ jobs:
              "subscriptionId":"${{ secrets.ARM_SUBSCRIPTION_ID }}",
              "tenantId":"${{ secrets.ARM_TENANT_ID }}"}
   
-      # Отваряме Kudu (ако е заключен)
+      # Opening KUDU
       - name: Open SCM temporarily
         shell: bash
         run: |
@@ -362,7 +358,7 @@ jobs:
             --ip-address 0.0.0.0/0
           sleep 5
   
-      # 1) Хеш проверка: локален index.html == качения в wwwroot
+      # 1) Hash check of the content uploaded in WWWROOT
       - name: Verify wwwroot content hash via Kudu VFS
         shell: bash
         run: |
@@ -381,7 +377,7 @@ jobs:
           echo "local=$WANT remote=$GOT"
           [ "$GOT" = "$WANT" ] || { echo "Content hash mismatch"; exit 1; }
   
-      # 2) DNS: A записът в privatelink зоната сочи към priv_ip от Terraform
+      # 2) DNS: The record in the privatelink zone pounting out towards priv_ip
       - name: DNS A record matches private IP
         shell: bash
         run: |
@@ -389,16 +385,13 @@ jobs:
           APP="${{ needs.infra.outputs.app }}"
           WANT="${{ needs.infra.outputs.priv_ip }}"
           ZONE="privatelink.azurewebsites.net"
-  
-          # гарантираме, че private-dns CLI е наличен
+
           az extension add -n private-dns -y >/dev/null || true
   
-          # открий RG на зоната в текущия subscription
           ZRG=$(az network private-dns zone list \
                  --query "[?name=='${ZONE}'].resourceGroup | [0]" -o tsv)
           [ -n "$ZRG" ] || { echo "Private DNS zone ${ZONE} not found"; exit 1; }
   
-          # вземи всички A записи за <app>.<zone>
           mapfile -t GOT_ARR < <(az network private-dns record-set a show \
             -g "${ZRG}" -z "${ZONE}" -n "${APP}" \
             --query "arecords[].ipv4Address" -o tsv || true)
@@ -411,7 +404,7 @@ jobs:
           done
           echo "DNS A record mismatch"; exit 1
   
-      # 3) Private Endpoint връзки: Approved/Succeeded
+      # 3) Private Endpoint Connections: Approved/Succeeded
       - name: Private Endpoint connection status
         shell: bash
         run: |
@@ -423,7 +416,7 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q "Approved" && echo "$OUT" | grep -q "Succeeded" || { echo "PE not Approved/Succeeded"; exit 1; }
   
-      # 4) Приложението е Running
+      # 4) App is running
       - name: Web App is Running
         shell: bash
         run: |
@@ -434,7 +427,7 @@ jobs:
           echo "State=$STATE"
           [ "$STATE" = "Running" ] || { echo "App not Running"; exit 1; }
   
-      # Затвори SCM винаги
+      # Closing SCM kudu
       - name: Close SCM rule
         if: always()
         shell: bash

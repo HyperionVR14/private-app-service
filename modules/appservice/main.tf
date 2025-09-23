@@ -19,7 +19,7 @@ resource "azurerm_linux_web_app" "app" {
   site_config {
     ftps_state = "Disabled"
 
-    # Allow само app subnet
+    # Allow for only app subnet
     ip_restriction {
       name                      = "allow-app-subnet"
       priority                  = 100
@@ -27,7 +27,7 @@ resource "azurerm_linux_web_app" "app" {
       virtual_network_subnet_id = var.app_subnet_id
     }
 
-    # Deny всички останали
+    # Deny everything else
     ip_restriction {
       name       = "deny-all"
       priority   = 65000
